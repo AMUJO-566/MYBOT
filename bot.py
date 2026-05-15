@@ -6,22 +6,22 @@ import ta
 from dotenv import load_dotenv
 
 # =========================
-# LOAD ENV
+# ENV SETUP
 # =========================
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("API_KEY")
 
-if not BOT_TOKEN or not API_KEY:
-    raise Exception("❌ Missing BOT_TOKEN or API_KEY in environment variables")
+if not BOT_TOKEN:
+    raise Exception("Missing BOT_TOKEN in Railway Variables")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-print("🧠 SMC LEVEL 2 BOT RUNNING")
+print("🧠 SMC BOT RUNNING (CLEAN VERSION)")
 
 # =========================
-# GET DATA
+# GET MARKET DATA
 # =========================
 def get_data(symbol):
     try:
@@ -30,16 +30,20 @@ def get_data(symbol):
         params = {
             "symbol": symbol,
             "interval": "1min",
-            "outputsize": 120,
+            "outputsize": 80,
             "apikey": API_KEY
         }
 
         r = requests.get(url, timeout=10).json()
 
         if "values" not in r:
+            print("API ERROR:", r)
             return None
 
         df = pd.DataFrame(r["values"])
+
+        if df.empty:
+            return None
 
         df["open"] = df["open"].astype(float)
         df["close"] = df["close"].astype(float)
@@ -48,7 +52,8 @@ def get_data(symbol):
 
         return df[::-1]
 
-    except:
+    except Exception as e:
+        print("GET DATA ERROR:", e)
         return None
 
 # =========================
@@ -61,7 +66,7 @@ def indicators(df):
     return df
 
 # =========================
-# LIQUIDITY SWEEP
+# SMART MONEY LOGIC
 # =========================
 def liquidity_sweep(df):
     high = df["high"].tail(20).max()
@@ -78,25 +83,21 @@ def liquidity_sweep(df):
 
     return "NO SWEEP ⚪"
 
-# =========================
-# FAIR VALUE GAP (FVG)
-# =========================
+
 def fvg(df):
     try:
         for i in range(2, len(df)):
             if df["low"].iloc[i] > df["high"].iloc[i-2]:
-                return "FVG UP 🟢 (BUY ZONE)"
+                return "FVG UP 🟢"
 
             if df["high"].iloc[i] < df["low"].iloc[i-2]:
-                return "FVG DOWN 🔴 (SELL ZONE)"
+                return "FVG DOWN 🔴"
 
         return "NO FVG ⚪"
     except:
         return "NO FVG ⚪"
 
-# =========================
-# TREND
-# =========================
+
 def trend(df):
     last = df.iloc[-1]
 
@@ -106,9 +107,7 @@ def trend(df):
         return "DOWNTREND 📉"
     return "SIDEWAYS ⚪"
 
-# =========================
-# BOS
-# =========================
+
 def bos(df):
     high = df["high"].tail(15).max()
     low = df["low"].tail(15).min()
@@ -120,12 +119,9 @@ def bos(df):
         return "BOS DOWN 🔻"
     return "NO BOS ⚪"
 
-# =========================
-# SIGNAL ENGINE
-# =========================
+
 def signal(df):
     last = df.iloc[-1]
-
     sweep = liquidity_sweep(df)
 
     buy = (
@@ -142,17 +138,12 @@ def signal(df):
 
     if buy:
         return "BUY 📈 (SMC ENTRY)"
-
     if sell:
         return "SELL 📉 (SMC ENTRY)"
-
     return "NO TRADE ⚪"
 
-# =========================
-# FORMAT MESSAGE
-# =========================
-def format_msg(pair, price, sig, tr, bos_signal, sweep, fvg_signal):
 
+def format_msg(pair, price, sig, tr, bos_signal, sweep, fvg_signal):
     return f"""
 🧠 SMC LEVEL 2 BOT
 
@@ -165,17 +156,15 @@ Liquidity: {sweep}
 FVG: {fvg_signal}
 
 Signal: {sig}
-
-Status: LIVE SMC SYSTEM
 """
 
 # =========================
-# COMMANDS
+# START COMMAND
 # =========================
 @bot.message_handler(commands=["start"])
 def start(message):
     bot.reply_to(message, """
-🧠 SMC LEVEL 2 BOT
+🧠 SMART MONEY BOT READY
 
 Commands:
 /eurusd
@@ -183,11 +172,14 @@ Commands:
 /gold
 """)
 
-def handle_pair(message, symbol, name):
+# =========================
+# HANDLER FUNCTION
+# =========================
+def process_pair(message, symbol, name):
     df = get_data(symbol)
 
     if df is None:
-        bot.reply_to(message, "❌ Market data error. Try again.")
+        bot.reply_to(message, "❌ Market error")
         return
 
     df = indicators(df)
@@ -201,5 +193,33 @@ def handle_pair(message, symbol, name):
 
     bot.reply_to(message, format_msg(name, price, sig, tr, bos_signal, sweep, fvg_signal))
 
+# =========================
+# COMMANDS
+# =========================
+@bot.message_handler(commands=["eurusd"])
+def eurusd(message):
+    process_pair(message, "EUR/USD", "EURUSD")
 
-@bot.message
+@bot.message_handler(commands=["gbpusd"])
+def gbpusd(message):
+    process_pair(message, "GBP/USD", "GBPUSD")
+
+@bot.message_handler(commands=["gold"])
+def gold(message):
+    process_pair(message, "XAU/USD", "GOLD")
+
+# =========================
+# FALLBACK HANDLER (FIX FOR YOUR ERROR)
+# =========================
+@bot.message_handler(content_types=['text'])
+def fallback(message):
+    bot.reply_to(message, "📊 Use /eurusd /gbpusd /gold")
+
+# =========================
+# RUN BOT (SAFE LOOP)
+# =========================
+while True:
+    try:
+        bot.infinity_polling(skip_pending=True)
+    except Exception as e:
+        print("BOT RESTARTING:", e)
